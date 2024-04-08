@@ -313,7 +313,7 @@ class TDMPC2:
 		index = 0
 		# reverse the index of the loop
 		for t in reversed(range(self.cfg.horizon)):
-			z = self.model.previous(z, action[t], task)
+			z = self.model.previous(z, action[t-1], task)
 			consistency_loss += F.mse_loss(z, zs[t-1]) * self.cfg.rho**index
 			index += 1
 		consistency_loss *= (1/self.cfg.horizon)
