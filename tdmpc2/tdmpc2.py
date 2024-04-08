@@ -322,7 +322,28 @@ class TDMPC2:
 		torch.nn.utils.clip_grad_norm_(self.model._inv_dynamics.parameters(), self.cfg.grad_clip_norm)
 		self.inv_optim.step()
 
+    def update_inverse_dynamics_single(self, obs, action, task):
+		with torch.no_grad():
+			zs = self.model.encode(obs, task)
+		self.inv_optim.zero_grad(set_to_none=True)
+		self.model.train()
+  
+		# Latent rollout
+		z_last = zs[-1]
+		z = z_last
 
+		consistency_loss = 0
+		
+		# reverse the index of the loop
+		for t in reversed(range(self.cfg.horizon)):
+			z = self.model.previous(zs[t], action[t-1], task)
+			consistency_loss += F.mse_loss(z, zs[t-1])
+		consistency_loss *= (1/self.cfg.horizon)
+		consistency_loss.backward()
+		# clip the gradient
+		torch.nn.utils.clip_grad_norm_(self.model._inv_dynamics.parameters(), self.cfg.grad_clip_norm)
+		self.inv_optim.step()
+    
 	def update(self, buffer):
 		"""
 		Main update function. Corresponds to one iteration of model learning.
