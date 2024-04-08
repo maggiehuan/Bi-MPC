@@ -297,8 +297,7 @@ class TDMPC2:
 		if not eval_mode:
 			a += std * torch.randn(self.cfg.action_dim, device=std.device)
 		return a.clamp_(-1, 1)
-
-
+		
 	def update_inverse_dynamics(self, obs, action, task):
 		with torch.no_grad():
 			zs = self.model.encode(obs, task)
@@ -321,8 +320,8 @@ class TDMPC2:
 		# clip the gradient
 		torch.nn.utils.clip_grad_norm_(self.model._inv_dynamics.parameters(), self.cfg.grad_clip_norm)
 		self.inv_optim.step()
-
-    def update_inverse_dynamics_single(self, obs, action, task):
+		
+	def update_inverse_dynamics_single(self, obs, action, task):
 		with torch.no_grad():
 			zs = self.model.encode(obs, task)
 		self.inv_optim.zero_grad(set_to_none=True)
