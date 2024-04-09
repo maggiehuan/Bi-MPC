@@ -1,4 +1,4 @@
-<h1>TD-MPC2</span></h1>
+<h1>Bi-MPC2</span></h1>
 
 
 
