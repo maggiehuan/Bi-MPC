@@ -2,7 +2,7 @@ defaults:
     - override hydra/launcher: submitit_local
 
 # environment
-task: ???
+task: walker-run
 obs: state
 
 # evaluation

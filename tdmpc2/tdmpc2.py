@@ -92,7 +92,7 @@ class TDMPC2:
 			task = torch.tensor([task], device=self.device)
 		z = self.model.encode(obs, task)
 		if self.cfg.mpc:
-			a = self.plan_reversed(z, t0=t0, eval_mode=eval_mode, task=task)
+			a = self.plan_reversed_whole(z, t0=t0, eval_mode=eval_mode, task=task)
 		else:
 			a = self.model.pi(z, task)[int(not eval_mode)][0]
 		return a.cpu()
@@ -237,6 +237,7 @@ class TDMPC2:
 		"""		
 		# Sample policy trajectories
 		action_threshold = 0.5 
+		
 		if self.cfg.num_pi_trajs > 0:
 			pi_actions = torch.empty(self.cfg.horizon, self.cfg.num_pi_trajs, self.cfg.action_dim, device=self.device)
 			_z = z.repeat(self.cfg.num_pi_trajs, 1)
@@ -275,6 +276,98 @@ class TDMPC2:
 			actions[:, self.cfg.num_pi_trajs:][~valid_actions_mask] = 0
 
 			# Compute elite actions
+			value = self._estimate_value(z, actions, task).nan_to_num_(0)
+			elite_idxs = torch.topk(value.squeeze(1), self.cfg.num_elites, dim=0).indices
+			elite_value, elite_actions = value[elite_idxs], actions[:, elite_idxs]
+
+			# Update parameters
+			max_value = elite_value.max(0)[0]
+			score = torch.exp(self.cfg.temperature*(elite_value - max_value))
+			score /= score.sum(0)
+			mean = torch.sum(score.unsqueeze(0) * elite_actions, dim=1) / (score.sum(0) + 1e-9)
+			std = torch.sqrt(torch.sum(score.unsqueeze(0) * (elite_actions - mean.unsqueeze(1)) ** 2, dim=1) / (score.sum(0) + 1e-9)) \
+				.clamp_(self.cfg.min_std, self.cfg.max_std)
+			if self.cfg.multitask:
+				mean = mean * self.model._action_masks[task]
+				std = std * self.model._action_masks[task]
+
+		# Select action
+		score = score.squeeze(1).cpu().numpy()
+		actions = elite_actions[:, np.random.choice(np.arange(score.shape[0]), p=score)]
+		self._prev_mean = mean
+		a, std = actions[0], std[0]
+		if not eval_mode:
+			a += std * torch.randn(self.cfg.action_dim, device=std.device)
+		return a.clamp_(-1, 1)
+
+
+	@torch.no_grad()
+	def plan_reversed_whole(self, z, t0=False, eval_mode=False, task=None):
+		"""
+		Plan a sequence of actions using the learned world model.
+		
+		Args:
+			z (torch.Tensor): Latent state from which to plan.
+			t0 (bool): Whether this is the first observation in the episode.
+			eval_mode (bool): Whether to use the mean of the action distribution.
+			task (Torch.Tensor): Task index (only used for multi-task experiments).
+
+		Returns:
+			torch.Tensor: Action to take in the environment.
+		"""		
+		# Sample policy trajectories
+		error_threshold = 0.1
+		
+		if self.cfg.num_pi_trajs > 0:
+			pi_actions = torch.empty(self.cfg.horizon, self.cfg.num_pi_trajs, self.cfg.action_dim, device=self.device)
+			_z = z.repeat(self.cfg.num_pi_trajs, 1)
+			for t in range(self.cfg.horizon-1):
+				pi_actions[t] = self.model.pi(_z, task)[1]
+				_z = self.model.next(_z, pi_actions[t], task)
+			pi_actions[-1] = self.model.pi(_z, task)[1]
+
+		# Initialize state and parameters
+		z = z.repeat(self.cfg.num_samples, 1)
+		mean = torch.zeros(self.cfg.horizon, self.cfg.action_dim, device=self.device)
+		std = self.cfg.max_std*torch.ones(self.cfg.horizon, self.cfg.action_dim, device=self.device)
+		if not t0:
+			mean[:-1] = self._prev_mean[1:]
+		actions = torch.empty(self.cfg.horizon, self.cfg.num_samples, self.cfg.action_dim, device=self.device)
+		if self.cfg.num_pi_trajs > 0:
+			actions[:, :self.cfg.num_pi_trajs] = pi_actions
+	
+		# Iterate MPPI
+		for _ in range(self.cfg.iterations):
+			# Sample actions
+			sampled_actions = (mean.unsqueeze(1) + std.unsqueeze(1) * torch.randn(self.cfg.horizon, self.cfg.num_samples-self.cfg.num_pi_trajs, self.cfg.action_dim, device=std.device)).clamp(-1, 1)
+			#print(sampled_actions.shape)
+			if self.cfg.multitask:
+				sampled_actions = sampled_actions * self.model._action_masks[task]
+
+			# error threshold filtering
+			errors = torch.zeros(self.cfg.horizon, self.cfg.num_samples, device=self.device)
+			
+			for i in range(self.cfg.num_samples):
+				final_state = self.forward_rollout(z, actions[:, i], task)  # Forward rollout to get final state
+				reconstructed_initial_state = self.inverse_rollout(final_state, actions[:, i], task)  # Inverse rollout to reconstruct initial state
+				error = self.calculate_error(z, reconstructed_initial_state)  # Calculate error between actual and reconstructed initial state
+				errors[:, i] = error
+
+			# valid_samples_mask = errors.mean(dim=0) < error_threshold
+			# valid_samples_indices = valid_samples_mask.nonzero().squeeze()
+			# actions = actions[valid_samples_indices]
+			#vaild_samples_indices = valid_samples_mask.nonzero().squeeze()
+			# print(actions[0].shape)
+			#actions = actions[:, vaild_samples_indices]
+			# print(actions.shape)
+			# actions = actions[:, valid_samples_mask]
+			valid_samples_mask = sampled_actions.abs().max(dim=2)[0] < error_threshold
+			valid_samples_mask = valid_samples_mask.unsqueeze(2).repeat(1, 1, self.cfg.action_dim)
+			actions[:, self.cfg.num_pi_trajs:][~valid_samples_mask] = 0
+			
+
+			# Compute elite actions
+			# print(z.shape, actions.shape)
 			value = self._estimate_value(z, actions, task).nan_to_num_(0)
 			elite_idxs = torch.topk(value.squeeze(1), self.cfg.num_elites, dim=0).indices
 			elite_value, elite_actions = value[elite_idxs], actions[:, elite_idxs]
@@ -421,3 +514,27 @@ class TDMPC2:
 			"grad_norm": float(grad_norm),
 			"pi_scale": float(self.scale.value),
 		}
+	
+
+	def calculate_error(self, actual_z, reconstructed_z):
+		error = F.mse_loss(actual_z, reconstructed_z) 
+		return error.item()
+
+	def forward_rollout(self, z, actions, task):
+		for t in range(len(actions)):
+			action = actions[t].unsqueeze(0)
+			action = action.expand(z.size(0), -1)
+			z = self.model.next(z, action, task)
+		return z
+
+	def inverse_rollout(self, final_state, actions, task):
+		z = final_state  # Start from the final latent state
+    	
+		for t in reversed(range(len(actions))):
+			action = actions[t].unsqueeze(0)
+			action = action.expand(z.size(0), -1)
+			z = self.model.previous(z, action, task)
+			
+		return z
+	# def _estimate_value(self, z, actions, task):
+	# 	selected_actions = actions[0]
