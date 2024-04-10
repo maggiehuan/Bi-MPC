@@ -338,21 +338,37 @@ class TDMPC2:
 	
 		# Iterate MPPI
 		for _ in range(self.cfg.iterations):
-			# Sample actions
-			sampled_actions = (mean.unsqueeze(1) + std.unsqueeze(1) * torch.randn(self.cfg.horizon, self.cfg.num_samples-self.cfg.num_pi_trajs, self.cfg.action_dim, device=std.device)).clamp(-1, 1)
-			#print(sampled_actions.shape)
+			actions[:, self.cfg.num_pi_trajs:] = (mean.unsqueeze(1) + std.unsqueeze(1) * \
+				torch.randn(self.cfg.horizon, self.cfg.num_samples-self.cfg.num_pi_trajs, self.cfg.action_dim, device=std.device)) \
+				.clamp(-1, 1)
 			if self.cfg.multitask:
-				sampled_actions = sampled_actions * self.model._action_masks[task]
+				actions = actions * self.model._action_masks[task]
+
+			# # Sample actions
+			# sampled_actions = (mean.unsqueeze(1) + std.unsqueeze(1) * torch.randn(self.cfg.horizon, self.cfg.num_samples-self.cfg.num_pi_trajs, self.cfg.action_dim, device=std.device)).clamp(-1, 1)
+			# #print(sampled_actions.shape)
+			# if self.cfg.multitask:
+			# 	sampled_actions = sampled_actions * self.model._action_masks[task]
 
 			# error threshold filtering
 			errors = torch.zeros(self.cfg.horizon, self.cfg.num_samples, device=self.device)
 			
 			for i in range(self.cfg.num_samples):
-				final_state = self.forward_rollout(z, actions[:, i], task)  # Forward rollout to get final state
-				reconstructed_initial_state = self.inverse_rollout(final_state, actions[:, i], task)  # Inverse rollout to reconstruct initial state
-				error = self.calculate_error(z, reconstructed_initial_state)  # Calculate error between actual and reconstructed initial state
+				final_state = self.forward_rollout(z, actions[:, i], task)  
+				reconstructed_initial_state = self.inverse_rollout(final_state, actions[:, i], task)  
+				error = self.calculate_error(z, reconstructed_initial_state)  
 				errors[:, i] = error
 
+			valid_samples_mask = (errors < error_threshold).all(dim=0)
+			extended_mask = ~valid_samples_mask.unsqueeze(0).unsqueeze(-1)
+			extended_mask = extended_mask.expand(actions.shape[0], -1, actions.shape[-1])
+			actions[extended_mask] = 0
+
+			# for i in range(sampled_actions.shape[0]):
+			# 	group_actions = sampled_actions[i]  
+			# 	actions = group_actions[valid_samples_mask]
+			# valid_samples_mask = (errors < error_threshold).all(dim=0)
+			# actions = sampled_actions[:, valid_samples_mask, :]
 			# valid_samples_mask = errors.mean(dim=0) < error_threshold
 			# valid_samples_indices = valid_samples_mask.nonzero().squeeze()
 			# actions = actions[valid_samples_indices]
@@ -361,9 +377,10 @@ class TDMPC2:
 			#actions = actions[:, vaild_samples_indices]
 			# print(actions.shape)
 			# actions = actions[:, valid_samples_mask]
-			valid_samples_mask = sampled_actions.abs().max(dim=2)[0] < error_threshold
-			valid_samples_mask = valid_samples_mask.unsqueeze(2).repeat(1, 1, self.cfg.action_dim)
-			actions[:, self.cfg.num_pi_trajs:][~valid_samples_mask] = 0
+			#valid_samples_mask = sampled_actions.abs().max(dim=2)[0] < error_threshold
+			#valid_samples_mask = valid_samples_mask.unsqueeze(2).repeat(1, 1, self.cfg.action_dim)
+			#actions[:, self.cfg.num_pi_trajs:][~valid_samples_mask] = 0
+   
 			
 
 			# Compute elite actions
