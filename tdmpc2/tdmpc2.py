@@ -16,10 +16,12 @@ class TDMPC2:
 
 	def __init__(self, cfg):   
 		self.cfg = cfg
-		self.device = torch.device('cuda')
+		self.cfg = cfg
+		#self.device = torch.device('cuda')
+		device_id = cfg.get('gpu_id', 0)  
+		print('device_id:', device_id)
+		self.device = torch.device(f'cuda:{device_id}' if torch.cuda.is_available() else 'cpu')
 		self.model = WorldModel(cfg).to(self.device)
-  
-  
 		self.optim = torch.optim.Adam([
 			{'params': self.model._encoder.parameters(), 'lr': self.cfg.lr*self.cfg.enc_lr_scale},
 			{'params': self.model._dynamics.parameters()},
@@ -29,13 +31,12 @@ class TDMPC2:
 		], lr=self.cfg.lr)
 		self.pi_optim = torch.optim.Adam(self.model._pi.parameters(), lr=self.cfg.lr, eps=1e-5)
 		self.inv_optim = torch.optim.Adam(self.model._inv_dynamics.parameters(), lr=self.cfg.lr)
-  
-  
+		
 		self.model.eval()
 		self.scale = RunningScale(cfg)
 		self.cfg.iterations += 2*int(cfg.action_dim >= 20) # Heuristic for large action spaces
 		self.discount = torch.tensor(
-			[self._get_discount(ep_len) for ep_len in cfg.episode_lengths], device='cuda'
+			[self._get_discount(ep_len) for ep_len in cfg.episode_lengths], device=self.device
 		) if self.cfg.multitask else self._get_discount(cfg.episode_length)
 
 	def _get_discount(self, episode_length):
@@ -310,6 +311,7 @@ class TDMPC2:
 
 		consistency_loss = 0
 		index = 0
+		
 		# reverse the index of the loop
 		for t in reversed(range(self.cfg.horizon)):
 			z = self.model.previous(z, action[t-1], task)

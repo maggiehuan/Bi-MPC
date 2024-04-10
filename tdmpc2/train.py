@@ -55,6 +55,7 @@ def train(cfg: dict):
 		logger=Logger(cfg),
 	)
 	trainer.train()
+	
 	print('\nTraining completed successfully')
 
 

@@ -6,8 +6,11 @@ class RunningScale:
 
 	def __init__(self, cfg):
 		self.cfg = cfg
-		self._value = torch.ones(1, dtype=torch.float32, device=torch.device('cuda'))
-		self._percentiles = torch.tensor([5, 95], dtype=torch.float32, device=torch.device('cuda'))
+		device_id = cfg.get('gpu_id', 0)  
+		print('device_id:', device_id)
+		self._device = torch.device(f'cuda:{device_id}' if torch.cuda.is_available() else 'cpu')
+		self._value = torch.ones(1, dtype=torch.float32, device=self._device)
+		self._percentiles = torch.tensor([5, 95], dtype=torch.float32, device=self._device)
 
 	def state_dict(self):
 		return dict(value=self._value, percentiles=self._percentiles)

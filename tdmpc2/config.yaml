@@ -2,16 +2,17 @@ defaults:
     - override hydra/launcher: submitit_local
 
 # environment
-task: dog-run
+task: ???
 obs: state
 
 # evaluation
 checkpoint: ???
 eval_episodes: 10
 eval_freq: 50000
+gpu_id: ???
 
 # training
-steps: 10_000_000
+steps: 1_000_000
 batch_size: 256
 reward_coef: 0.1
 value_coef: 0.1
@@ -26,7 +27,7 @@ discount_min: 0.95
 discount_max: 0.995
 buffer_size: 1_000_000
 exp_name: default
-data_dir: '/home/huan.25/worldmodel/bimpc/data'
+data_dir: '/home/temp/trrrrrr/Bi-MPC/data'
 
 # planning
 mpc: true
